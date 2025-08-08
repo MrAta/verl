@@ -1839,6 +1839,19 @@ class DistillationStudentWorker(DistillationBaseWorker):
         self.device_mesh = create_device_mesh(self.world_size, self.config.student.fsdp_config.fsdp_size)
         self._create_ulysses_sharding_manager(self.config.student.get("ulysses_sequence_parallel_size", 1))
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def init_model(self):
+        from verl.workers.distillation.distill_model import DistillLanguageModel
+
+        self.distill_model = DistillLanguageModel(self.config.student)
+
+    def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
+        pass
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_log_prob(self, data: DataProto):
+        pass
+
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def update_student(self, data: DataProto):
         pass
