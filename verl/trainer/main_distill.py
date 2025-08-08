@@ -83,8 +83,8 @@ class TaskRunner:
 
         # Download the checkpoint from HDFS to the local machine.
         # `use_shm` determines whether to use shared memory, which could lead to faster model loading if turned on
-        student_local_path = copy_to_local(config.model.path, use_shm=config.get("use_shm", False))
-        teacher_local_path = copy_to_local(config.teacher_model.path, use_shm=config.get("use_shm", False))
+        student_local_path = copy_to_local(config.student.model_path, use_shm=config.get("use_shm", False))
+        teacher_local_path = copy_to_local(config.teacher.model_path, use_shm=config.get("use_shm", False))
         print(f"Student model path: {student_local_path}")
         print(f"Teacher model path: {teacher_local_path}")
 
