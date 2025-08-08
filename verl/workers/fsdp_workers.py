@@ -1781,7 +1781,7 @@ class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
         return True
 
 
-class DistillationStudentWorker(Worker, DistProfilerExtension):
+class DistillationBaseWorker(Worker, DistProfilerExtension):
     def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
         Worker.__init__(self)
         DistProfilerExtension.__init__(self, rank=self.rank, config=omega_conf_to_dataclass(config.get("profiler", {})))
@@ -1799,9 +1799,25 @@ class DistillationStudentWorker(Worker, DistProfilerExtension):
                 world_size=world_size,
             )
         # build device mesh for FSDP
-        world_size = torch.distributed.get_world_size()
-        self.device_mesh = create_device_mesh(world_size, self.config.fsdp_config.fsdp_size)
-        print(f"Device mesh: {self.device_mesh}")
+        self.world_size = torch.distributed.get_world_size()
+
+    def _create_ulysses_sharding_manager(self, ulysses_sequence_parallel_size: int = 1):
+        self.ulysses_device_mesh = None
+        self.ulysses_sequence_parallel_size = ulysses_sequence_parallel_size
+        dp = self.world_size // self.ulysses_sequence_parallel_size
+        if self.ulysses_sequence_parallel_size > 1:
+            self.ulysses_device_mesh = init_device_mesh(
+                get_device_name(), mesh_shape=(dp, self.ulysses_sequence_parallel_size), mesh_dim_names=["dp", "sp"]
+            )
+
+        self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
+
+
+class DistillationStudentWorker(DistillationBaseWorker):
+    def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
+        super().__init__(config, generates_sequences, **kwargs)
+        self.device_mesh = create_device_mesh(self.world_size, self.config.student.fsdp_config.fsdp_size)
+        self._create_ulysses_sharding_manager(self.config.student.get("ulysses_sequence_parallel_size", 1))
 
     def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
         pass
@@ -1810,14 +1826,15 @@ class DistillationStudentWorker(Worker, DistProfilerExtension):
         pass
 
 
-class DistillationTeacherWorker(Worker, DistProfilerExtension):
+class DistillationTeacherWorker(DistillationBaseWorker):
     """
     The teacher model always uses the sglang engine for both computing log probabilities and generating sequences.
     """
 
     def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
-        Worker.__init__(self)
-        DistProfilerExtension.__init__(self, rank=self.rank, config=omega_conf_to_dataclass(config.get("profiler", {})))
+        super().__init__(config, generates_sequences, **kwargs)
+        self.device_mesh = create_device_mesh(self.world_size, self.config.teacher.fsdp_config.fsdp_size)
+        self._create_ulysses_sharding_manager(self.config.teacher.get("ulysses_sequence_parallel_size", 1))
 
     def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
         pass
