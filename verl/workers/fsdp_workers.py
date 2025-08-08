@@ -1812,6 +1812,26 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
 
         self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def init_model(self):
+        raise NotImplementedError
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_log_prob(self, data: DataProto):
+        raise NotImplementedError
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def generate_sequences(self, prompts: DataProto):
+        raise NotImplementedError
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def save_checkpoint(self, local_path, hdfs_path=None, global_step=0, max_ckpt_to_keep=None):
+        raise NotImplementedError
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def load_checkpoint(self, local_path, hdfs_path=None, del_local_after_load=True):
+        raise NotImplementedError
+
 
 class DistillationStudentWorker(DistillationBaseWorker):
     def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
@@ -1819,10 +1839,8 @@ class DistillationStudentWorker(DistillationBaseWorker):
         self.device_mesh = create_device_mesh(self.world_size, self.config.student.fsdp_config.fsdp_size)
         self._create_ulysses_sharding_manager(self.config.student.get("ulysses_sequence_parallel_size", 1))
 
-    def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
-        pass
-
-    def _build_rollout(self, trust_remote_code=False):
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def update_student(self, data: DataProto):
         pass
 
 
