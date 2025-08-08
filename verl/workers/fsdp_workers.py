@@ -1779,3 +1779,53 @@ class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
             await self.rollout.sleep()
         # return something to block the caller
         return True
+
+
+class DistillationStudentWorker(Worker, DistProfilerExtension):
+    def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
+        Worker.__init__(self)
+        DistProfilerExtension.__init__(self, rank=self.rank, config=omega_conf_to_dataclass(config.get("profiler", {})))
+        self.generates_sequences = generates_sequences
+        self.config = config
+        import torch.distributed
+
+        if not torch.distributed.is_initialized():
+            rank = int(os.environ.get("RANK", 0))
+            world_size = int(os.environ.get("WORLD_SIZE", 1))
+            dist.init_process_group(
+                backend=f"cpu:gloo,{get_device_name()}:{get_nccl_backend()}",
+                init_method=os.environ.get("DIST_INIT_METHOD", None),
+                rank=rank,
+                world_size=world_size,
+            )
+        # build device mesh for FSDP
+        world_size = torch.distributed.get_world_size()
+        self.device_mesh = create_device_mesh(world_size, self.config.fsdp_config.fsdp_size)
+        print(f"Device mesh: {self.device_mesh}")
+
+    def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
+        pass
+
+    def _build_rollout(self, trust_remote_code=False):
+        pass
+
+
+class DistillationTeacherWorker(Worker, DistProfilerExtension):
+    """
+    The teacher model always uses the sglang engine for both computing log probabilities and generating sequences.
+    """
+
+    def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
+        Worker.__init__(self)
+        DistProfilerExtension.__init__(self, rank=self.rank, config=omega_conf_to_dataclass(config.get("profiler", {})))
+
+    def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
+        pass
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def compute_log_prob(self, data: DataProto):
+        pass
+
+    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
+    def generate_sequences(self, prompts: DataProto):
+        pass
