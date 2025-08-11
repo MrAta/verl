@@ -1830,6 +1830,7 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
         use_liger=False,
         trust_remote_code=False,
     ):
+        from torch import optim
         from torch.distributed.fsdp import MixedPrecision
         from transformers import AutoConfig, AutoModelForCausalLM
         from transformers.generation.utils import GenerationConfig
@@ -1856,8 +1857,8 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
             local_path, trust_remote_code=trust_remote_code, attn_implementation=attn_impl
         )
         self.generation_config = GenerationConfig(
-            max_new_tokens=self.distill_training_config.max_new_tokens,
-            temperature=self.distill_training_config.sample_temperature,
+            max_new_tokens=self.config.max_new_tokens,
+            temperature=self.config.sample_temperature,
             do_sample=True,
             top_k=0,
             use_cache=True,
@@ -1883,50 +1884,69 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
                 _apply_liger_kernel_to_instance(model)
 
             model.to(dtype)
-            if self.rank == 0:
-                print_model_size(model)
+        torch.distributed.barrier()
+        if self.rank == 0:
+            print_model_size(model)
 
-            mixed_precision_config = fsdp_config.get("mixed_precision", None)
-            if mixed_precision_config is not None:
-                param_dtype = PrecisionType.to_dtype(mixed_precision_config.get("param_dtype", "bf16"))
-                reduce_dtype = PrecisionType.to_dtype(mixed_precision_config.get("reduce_dtype", "fp32"))
-                buffer_dtype = PrecisionType.to_dtype(mixed_precision_config.get("buffer_dtype", "fp32"))
-            else:
-                param_dtype = torch.bfloat16
-                reduce_dtype = torch.float32
-                buffer_dtype = torch.float32
+        mixed_precision_config = fsdp_config.get("mixed_precision", None)
+        if mixed_precision_config is not None:
+            param_dtype = PrecisionType.to_dtype(mixed_precision_config.get("param_dtype", "bf16"))
+            reduce_dtype = PrecisionType.to_dtype(mixed_precision_config.get("reduce_dtype", "fp32"))
+            buffer_dtype = PrecisionType.to_dtype(mixed_precision_config.get("buffer_dtype", "fp32"))
+        else:
+            param_dtype = torch.bfloat16
+            reduce_dtype = torch.float32
+            buffer_dtype = torch.float32
 
-            mixed_precision = MixedPrecision(
-                param_dtype=param_dtype, reduce_dtype=reduce_dtype, buffer_dtype=buffer_dtype
+        mixed_precision = MixedPrecision(param_dtype=param_dtype, reduce_dtype=reduce_dtype, buffer_dtype=buffer_dtype)
+
+        auto_wrap_policy = get_fsdp_wrap_policy(
+            module=model,
+            config=fsdp_config.get("wrap_policy", None),
+            is_lora=self.config.model.get("lora_rank", 0) > 0,
+        )
+
+        if self.rank == 0:
+            print(f"Using auto wrap policy: {auto_wrap_policy}")
+
+        fsdp_mesh = self.device_mesh
+        sharding_strategy = get_sharding_strategy(fsdp_mesh)
+
+        # TODO(MrAta): add support for fsdp2
+        model_fsdp = FSDP(
+            model,
+            param_init_fn=init_fn,
+            auto_wrap_policy=auto_wrap_policy,
+            device_id=get_device_id(),
+            sharding_strategy=sharding_strategy,
+            mixed_precision=mixed_precision,
+            sync_module_states=True,
+            device_mesh=self.device_mesh,
+            use_orig_params=fsdp_config.get("use_orig_params", False),
+            forward_prefetch=fsdp_config.get("forward_prefetch", False),
+        )
+        # TODO(MrAta): Support activation checkpointing
+
+        # build optimizer
+        optimizer = None
+        lr_scheduler = None
+        if optim_config is None:
+            # it's a teacher model
+            for p in model_fsdp.parameters():
+                p.requires_grad = False
+            model_fsdp.eval()
+        else:
+            # Student model
+
+            optimizer = optim.AdamW(model_fsdp.parameters(), lr=self.config.lr, weight_decay=self.config.weight_decay)
+            lr_scheduler = optim.lr_scheduler.OneCycleLR(
+                optimizer,
+                max_lr=self.config.lr,
+                total_steps=self.config.num_train_steps,
+                pct_start=self.config.warmup_ratio,
             )
 
-            auto_wrap_policy = get_fsdp_wrap_policy(
-                module=model,
-                config=fsdp_config.get("wrap_policy", None),
-                is_lora=self.config.model.get("lora_rank", 0) > 0,
-            )
-
-            if self.rank == 0:
-                print(f"Using auto wrap policy: {auto_wrap_policy}")
-
-            fsdp_mesh = self.device_mesh
-            sharding_strategy = get_sharding_strategy(fsdp_mesh)
-
-            # TODO(MrAta): add support for fsdp2
-            model_fsdp = FSDP(
-                model,
-                param_init_fn=init_fn,
-                auto_wrap_policy=auto_wrap_policy,
-                device_id=get_device_id(),
-                sharding_strategy=sharding_strategy,
-                mixed_precision=mixed_precision,
-                sync_module_states=True,
-                device_mesh=self.device_mesh,
-                use_orig_params=fsdp_config.get("use_orig_params", False),
-                forward_prefetch=fsdp_config.get("forward_prefetch", False),
-            )
-            # build optimizer
-            return model_fsdp
+        return model_fsdp, optimizer, lr_scheduler, model_config
 
 
 class DistillationStudentWorker(DistillationBaseWorker):
