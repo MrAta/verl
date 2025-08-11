@@ -93,6 +93,14 @@ def get_generation_config(
             return None
 
 
+def is_flash_attn_available() -> bool:
+    try:
+        from flash_attn import flash_attn_func, flash_attn_qkvpacked_func  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
 def create_huggingface_actor(model_name: str, override_config_kwargs=None, automodel_kwargs=None) -> nn.Module:
     """
 

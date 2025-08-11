@@ -1801,17 +1801,6 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
         # build device mesh for FSDP
         self.world_size = torch.distributed.get_world_size()
 
-    def _create_ulysses_sharding_manager(self, ulysses_sequence_parallel_size: int = 1):
-        self.ulysses_device_mesh = None
-        self.ulysses_sequence_parallel_size = ulysses_sequence_parallel_size
-        dp = self.world_size // self.ulysses_sequence_parallel_size
-        if self.ulysses_sequence_parallel_size > 1:
-            self.ulysses_device_mesh = init_device_mesh(
-                get_device_name(), mesh_shape=(dp, self.ulysses_sequence_parallel_size), mesh_dim_names=["dp", "sp"]
-            )
-
-        self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
-
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         raise NotImplementedError
@@ -1832,18 +1821,117 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
     def load_checkpoint(self, local_path, hdfs_path=None, del_local_after_load=True):
         raise NotImplementedError
 
+    def _build_model_optimizer(
+        self,
+        model_path: str,
+        fsdp_config: FSDPEngineConfig,
+        trainer_precision: str,
+        optim_config=None,
+        use_liger=False,
+        trust_remote_code=False,
+    ):
+        from torch.distributed.fsdp import MixedPrecision
+        from transformers import AutoConfig, AutoModelForCausalLM
+
+        from verl.utils.model import get_generation_config, is_flash_attn_available, print_model_size
+        from verl.utils.torch_dtypes import PrecisionType
+
+        local_path = model_path
+        self.tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
+        self.processor = hf_processor(local_path, trust_remote_code=trust_remote_code)
+
+        trainer_precision = fsdp_config.trainer_precision
+        if "mixed" in trainer_precision or trainer_precision == "32-true":
+            dtype = torch.float32
+        elif "f16" in trainer_precision:
+            dtype = torch.float16
+        elif "bf16" in trainer_precision:
+            dtype = torch.bfloat16
+        else:
+            dtype = None
+
+        attn_impl = "flash_attention_2" if is_flash_attn_available() else "sdpa"
+        model_config = AutoConfig.from_pretrained(
+            local_path, trust_remote_code=trust_remote_code, attn_implementation=attn_impl
+        )
+        self.generation_config = get_generation_config(local_path, trust_remote_code=trust_remote_code)
+
+        init_context = get_init_weight_context_manager(
+            use_meta_tensor=not model_config.tie_word_embeddings, mesh=self.device_mesh
+        )
+
+        with init_context(), warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = AutoModelForCausalLM.from_pretrained(
+                pretrained_model_name_or_path=model_path,
+                torch_dtype=dtype,
+                attn_implementation=attn_impl,
+                config=model_config,
+                trust_remote_code=trust_remote_code,
+            )
+
+            if use_liger:
+                from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
+
+                _apply_liger_kernel_to_instance(model)
+
+            model.to(dtype)
+            if self.rank == 0:
+                print_model_size(model)
+
+            mixed_precision_config = fsdp_config.get("mixed_precision", None)
+            if mixed_precision_config is not None:
+                param_dtype = PrecisionType.to_dtype(mixed_precision_config.get("param_dtype", "bf16"))
+                reduce_dtype = PrecisionType.to_dtype(mixed_precision_config.get("reduce_dtype", "fp32"))
+                buffer_dtype = PrecisionType.to_dtype(mixed_precision_config.get("buffer_dtype", "fp32"))
+            else:
+                param_dtype = torch.bfloat16
+                reduce_dtype = torch.float32
+                buffer_dtype = torch.float32
+
+            mixed_precision = MixedPrecision(
+                param_dtype=param_dtype, reduce_dtype=reduce_dtype, buffer_dtype=buffer_dtype
+            )
+
+            auto_wrap_policy = get_fsdp_wrap_policy(
+                module=model,
+                config=fsdp_config.get("wrap_policy", None),
+                is_lora=self.config.model.get("lora_rank", 0) > 0,
+            )
+
+            if self.rank == 0:
+                print(f"Using auto wrap policy: {auto_wrap_policy}")
+
+            fsdp_mesh = self.device_mesh
+            sharding_strategy = get_sharding_strategy(fsdp_mesh)
+
+            # TODO(MrAta): add support for fsdp2
+            model_fsdp = FSDP(
+                model,
+                param_init_fn=init_fn,
+                auto_wrap_policy=auto_wrap_policy,
+                device_id=get_device_id(),
+                sharding_strategy=sharding_strategy,
+                mixed_precision=mixed_precision,
+                sync_module_states=True,
+                device_mesh=self.device_mesh,
+                use_orig_params=fsdp_config.get("use_orig_params", False),
+                forward_prefetch=fsdp_config.get("forward_prefetch", False),
+            )
+            # build optimizer
+            return model_fsdp
+
 
 class DistillationStudentWorker(DistillationBaseWorker):
     def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
         super().__init__(config, generates_sequences, **kwargs)
         self.device_mesh = create_device_mesh(self.world_size, self.config.student.fsdp_config.fsdp_size)
-        self._create_ulysses_sharding_manager(self.config.student.get("ulysses_sequence_parallel_size", 1))
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
         from verl.workers.distillation.distill_model import DistillLanguageModel
 
-        self.distill_model = DistillLanguageModel(self.config.student)
+        self.model = DistillLanguageModel(self.config.student)
 
     def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
         pass
