@@ -1832,8 +1832,9 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
     ):
         from torch.distributed.fsdp import MixedPrecision
         from transformers import AutoConfig, AutoModelForCausalLM
+        from transformers.generation.utils import GenerationConfig
 
-        from verl.utils.model import get_generation_config, is_flash_attn_available, print_model_size
+        from verl.utils.model import is_flash_attn_available, print_model_size
         from verl.utils.torch_dtypes import PrecisionType
 
         local_path = model_path
@@ -1854,7 +1855,13 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
         model_config = AutoConfig.from_pretrained(
             local_path, trust_remote_code=trust_remote_code, attn_implementation=attn_impl
         )
-        self.generation_config = get_generation_config(local_path, trust_remote_code=trust_remote_code)
+        self.generation_config = GenerationConfig(
+            max_new_tokens=self.distill_training_config.max_new_tokens,
+            temperature=self.distill_training_config.sample_temperature,
+            do_sample=True,
+            top_k=0,
+            use_cache=True,
+        )
 
         init_context = get_init_weight_context_manager(
             use_meta_tensor=not model_config.tie_word_embeddings, mesh=self.device_mesh
