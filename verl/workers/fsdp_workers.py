@@ -1788,6 +1788,7 @@ class DistillationWorker(Worker, DistProfilerExtension):
         self.generates_sequences = generates_sequences
         self.config = config
         self.role = role
+        self._is_student = self.role == "student"
         import torch.distributed
 
         if not torch.distributed.is_initialized():
@@ -1818,6 +1819,12 @@ class DistillationWorker(Worker, DistProfilerExtension):
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def generate_sequences(self, prompts: DataProto):
+        raise NotImplementedError
+
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="student"))
+    @DistProfiler.annotate(color="red", role="student_update")
+    def update_student(self, data: DataProto):
+        assert self._is_student, "Only student can be trained!"
         raise NotImplementedError
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
