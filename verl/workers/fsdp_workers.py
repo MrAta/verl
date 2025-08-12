@@ -1825,7 +1825,6 @@ class DistillationWorker(Worker, DistProfilerExtension):
     @DistProfiler.annotate(color="red", role="student_update")
     def update_student(self, data: DataProto):
         assert self._is_student, "Only student can be trained!"
-        raise NotImplementedError
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def save_checkpoint(self, local_path, hdfs_path=None, global_step=0, max_ckpt_to_keep=None):
