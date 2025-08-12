@@ -14,7 +14,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from .utils import get_distillation_loss_fn
+
 
 class DistillLanguageModel:
-    def __init__(self, model, optimizer, model_config):
-        pass
+    def __init__(self, model, optimizer, loss_fn, config):
+        self.model = model
+        self.optimizer = optimizer
+        self.config = config
+        self.loss_fn = get_distillation_loss_fn(loss_fn)
+
+    def _forward_batch(self, batch, teacher_logits):
+        student_outputs = self.model(
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            labels=batch["labels"],
+        )
+        distillation_loss = self.loss_fn(batch, student_outputs.logits, teacher_logits)
+
+        # NLL loss
+        train_loss = student_outputs.loss
+
+        total_loss = (
+            student_outputs.loss * (1 - self.config.distillation_loss_ratio)
+            + distillation_loss * self.config.distillation_loss_ratio
+        )
+        return distillation_loss, train_loss, total_loss
