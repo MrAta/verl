@@ -15,8 +15,7 @@
 # limitations under the License.
 
 from verl import DataProto
-
-from .utils import get_distillation_loss_fn
+from verl.trainer.distillation.losses import DISTILL_LOSS_MAP
 
 
 class DistillLanguageModel:
@@ -24,7 +23,8 @@ class DistillLanguageModel:
         self.model = model
         self.optimizer = optimizer
         self.config = config
-        self.loss_fn = get_distillation_loss_fn(loss_fn)
+        assert loss_fn in DISTILL_LOSS_MAP, f"Invalid distillation loss function: {loss_fn}"
+        self.loss_fn = DISTILL_LOSS_MAP[loss_fn]
 
     def _forward_batch(self, batch):
         student_outputs = self.model(
