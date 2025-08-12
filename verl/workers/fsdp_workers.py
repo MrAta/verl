@@ -1820,13 +1820,35 @@ class DistillationWorker(Worker, DistProfilerExtension):
         # for both student and the teacher, we need to build the engine
         self.engine, self.engine_sharding_manager = self._build_engine()
 
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def compute_log_prob(self, data: DataProto):
+        if self._is_student:
+            self.flops_counter = FlopsCounter(self.model_config)
+            self.checkpoint_manager = FSDPCheckpointManager(
+                model=self.fsdp_module,
+                optimizer=self.optimizer,
+                lr_scheduler=self.lr_scheduler,
+                processing_class=self.processor if self.processor is not None else self.tokenizer,
+                checkpoint_config=self.config.student.checkpoint_config,
+            )
+
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="teacher_engine"))
+    @DistProfiler.annotate(color="blue", role="teacher_compute_log_prob")
+    def compute_teacher_log_prob(self, data: DataProto):
         raise NotImplementedError
 
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def generate_sequences(self, prompts: DataProto):
-        raise NotImplementedError("Only supervised distillation is supported, no generation is needed for now!")
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="student"))
+    @DistProfiler.annotate(color="red", role="student_compute_log_prob")
+    def compute_student_log_prob(self, data: DataProto):
+        raise NotImplementedError
+
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="student_engine"))
+    @DistProfiler.annotate(color="red", role="student_generate")
+    def generate_student_sequences(self, prompts: DataProto):
+        pass
+
+    @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="teacher_engine"))
+    @DistProfiler.annotate(color="blue", role="teacher_generate")
+    def generate_teacher_sequences(self, prompts: DataProto):
+        pass
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="student"))
     @DistProfiler.annotate(color="red", role="student_update")
@@ -1855,7 +1877,7 @@ class DistillationWorker(Worker, DistProfilerExtension):
 
         is_rank_0 = device_mesh["infer_tp"].get_local_rank() == 0
         self._register_dispatch_collect_info(
-            mesh_name="engine",
+            mesh_name=f"{self.role}_engine",
             dp_rank=device_mesh["dp"].get_local_rank(),
             is_collect=is_rank_0,
         )
