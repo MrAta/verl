@@ -1782,11 +1782,12 @@ class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
 
 
 class DistillationBaseWorker(Worker, DistProfilerExtension):
-    def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
+    def __init__(self, config: DictConfig, generates_sequences: bool, role: str, **kwargs):
         Worker.__init__(self)
         DistProfilerExtension.__init__(self, rank=self.rank, config=omega_conf_to_dataclass(config.get("profiler", {})))
         self.generates_sequences = generates_sequences
         self.config = config
+        self.role = role
         import torch.distributed
 
         if not torch.distributed.is_initialized():
@@ -1820,6 +1821,9 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def load_checkpoint(self, local_path, hdfs_path=None, del_local_after_load=True):
         raise NotImplementedError
+
+    def _build_engine(self):
+        pass
 
     def _build_model_optimizer(
         self,
@@ -1903,7 +1907,7 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
         auto_wrap_policy = get_fsdp_wrap_policy(
             module=model,
             config=fsdp_config.get("wrap_policy", None),
-            is_lora=self.config.model.get("lora_rank", 0) > 0,
+            is_lora=False,
         )
 
         if self.rank == 0:
@@ -1951,17 +1955,20 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
 
 class DistillationStudentWorker(DistillationBaseWorker):
     def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
-        super().__init__(config, generates_sequences, **kwargs)
+        super().__init__(config, generates_sequences, role="student", **kwargs)
         self.device_mesh = create_device_mesh(self.world_size, self.config.student.fsdp_config.fsdp_size)
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        from verl.workers.distillation.distill_model import DistillLanguageModel
-
-        self.model = DistillLanguageModel(self.config.student)
-
-    def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
-        pass
+        self.model, self.optimizer, self.lr_scheduler, self.model_config = self._build_model_optimizer(
+            model_path=self.config.student.model_path,
+            fsdp_config=self.config.student.fsdp_config,
+            trainer_precision=self.config.student.dtype,
+            optim_config=self.config.student.optim_config,
+            use_liger=self.config.use_liger,
+        )
+        if self.generate_sequences:
+            self._build_engine()
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def compute_log_prob(self, data: DataProto):
@@ -1978,12 +1985,17 @@ class DistillationTeacherWorker(DistillationBaseWorker):
     """
 
     def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
-        super().__init__(config, generates_sequences, **kwargs)
+        super().__init__(config, generates_sequences, role="teacher", **kwargs)
         self.device_mesh = create_device_mesh(self.world_size, self.config.teacher.fsdp_config.fsdp_size)
-        self._create_ulysses_sharding_manager(self.config.teacher.get("ulysses_sequence_parallel_size", 1))
-
-    def _build_model_optimizer(self, model_path, optim_config, override_model_config, override_transformer_config):
-        pass
+        self.teacher_model, _, _, self.teacher_model_config = self._build_model_optimizer(
+            model_path=self.config.teacher.model_path,
+            fsdp_config=self.config.teacher.fsdp_config,
+            trainer_precision=self.config.teacher.dtype,
+            optim_config=None,
+            use_liger=self.config.use_liger,
+        )
+        if self.generate_sequences:
+            self._build_engine()
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def compute_log_prob(self, data: DataProto):
