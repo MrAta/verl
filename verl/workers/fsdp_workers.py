@@ -1817,10 +1817,6 @@ class DistillationWorker(Worker, DistProfilerExtension):
                 use_liger=self.config.use_liger,
             )
             self.student_model = DistillLanguageModel(self.fsdp_module, self.optimizer, self.config.student)
-        # for both student and the teacher, we need to build the engine
-        self.engine, self.engine_sharding_manager = self._build_engine()
-
-        if self._is_student:
             self.flops_counter = FlopsCounter(self.model_config)
             self.checkpoint_manager = FSDPCheckpointManager(
                 model=self.fsdp_module,
@@ -1829,6 +1825,10 @@ class DistillationWorker(Worker, DistProfilerExtension):
                 processing_class=self.processor if self.processor is not None else self.tokenizer,
                 checkpoint_config=self.config.student.checkpoint_config,
             )
+            if self.generates_sequences:
+                self.engine, self.engine_sharding_manager = self._build_engine()
+        else:
+            self.engine, self.engine_sharding_manager = self._build_engine()
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="teacher_engine"))
     @DistProfiler.annotate(color="blue", role="teacher_compute_log_prob")
@@ -1843,12 +1843,12 @@ class DistillationWorker(Worker, DistProfilerExtension):
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="student_engine"))
     @DistProfiler.annotate(color="red", role="student_generate")
     def generate_student_sequences(self, prompts: DataProto):
-        pass
+        assert self.generates_sequences, "Student model is not configured to generate sequences"
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="teacher_engine"))
     @DistProfiler.annotate(color="blue", role="teacher_generate")
     def generate_teacher_sequences(self, prompts: DataProto):
-        pass
+        assert self.generates_sequences, "Teacher model is not configured to generate sequences"
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="student"))
     @DistProfiler.annotate(color="red", role="student_update")
