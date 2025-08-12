@@ -13,19 +13,88 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal, Optional
 
 from dataclasses_json import Undefined, dataclass_json
 
 from verl.base_config import BaseConfig
+from verl.trainer.config import CheckpointConfig
 from verl.trainer.distillation.losses import DISTILL_LOSS_MAP
 
-__all__ = ["DistillationConfig"]
+from .engine import FSDPEngineConfig
+from .optimizer import FSDPOptimizerConfig
+
+__all__ = [
+    "DistillationConfig",
+    "DistillStudentConfig",
+    "DistillTeacherConfig",
+]
+
+
+@dataclass
+class DistillStudentConfig(BaseConfig):
+    """Student-side configuration for distillation training.
+
+    This mirrors the style of `ActorConfig`/`CriticConfig` with FSDP engine and optimizer blocks.
+
+    Args:
+        model_path: HF model path or local checkpoint for the student model.
+        dtype: Trainer precision string, e.g. "bf16", "f16", or "32-true".
+        fsdp_config: FSDP engine configuration for wrapping the student model.
+        optim_config: Optimizer configuration for student updates.
+        checkpoint_config: Checkpoint saving/loading configuration for the student model.
+    """
+
+    model_path: str = ""
+    dtype: str = "bf16"
+    fsdp_config: FSDPEngineConfig = field(default_factory=FSDPEngineConfig)
+    optim_config: FSDPOptimizerConfig = field(default_factory=FSDPOptimizerConfig)
+    checkpoint_config: CheckpointConfig = field(default_factory=CheckpointConfig)
+
+    def __post_init__(self):
+        if not self.model_path:
+            raise ValueError("student.model_path must be specified")
+        if self.dtype not in {"bf16", "f16", "16-mixed", "bf16-mixed", "32-true"}:
+            # Keep permissive; DistillationWorker maps this to torch dtype.
+            raise ValueError(
+                f"Unsupported student dtype '{self.dtype}'. Expected one of bf16/f16/16-mixed/bf16-mixed/32-true."
+            )
+
+
+@dataclass
+class DistillTeacherConfig(BaseConfig):
+    """Teacher-side configuration for distillation training.
+
+    The `engine` block follows the rollout engine style (e.g., SGLang/vLLM),
+    similar to `trainer/config/rollout/rollout.yaml`.
+
+    Args:
+        model_path: HF model path or local checkpoint for the teacher model.
+        engine: Inference engine config (e.g., SGLang) used for sampling/generation.
+    """
+
+    model_path: str = ""
+    engine: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.model_path:
+            raise ValueError("teacher.model_path must be specified")
+        if not isinstance(self.engine, dict):
+            raise TypeError("teacher.engine must be a dict-like config")
 
 
 @dataclass_json(undefined=Undefined.RAISE)
 @dataclass
 class DistillationConfig(BaseConfig):
+    """Top-level distillation hyperparameters and options.
+
+    This config complements the student/teacher blocks. It encapsulates
+    loss selection, temperature, and sampling strategy knobs that are consumed
+    by the distillation trainer/model.
+
+    Note: Validation ensures values are within reasonable ranges, similar to PPO configs.
+    """
+
     enable_distill: bool = field(default=False)
     teacher_model_path: str = field(default="")
     temperature: float = field(default=1.0)
@@ -65,30 +134,31 @@ class DistillationConfig(BaseConfig):
     sample_fraction: float = field(
         default=1.0,
         metadata={
-            "help": "Fraction of batches whose responses are sampled from student (on-policy) distribution \
-                or teacher (sequence-evel)  distribution rather than using the original responses, \
-                same as the huggingface GKD trainer (parameter self.lmbda).\
-                https://huggingface.co/docs/trl/gkd_trainer#trl.GKDConfig \
-                e.g., 0.4 means 40% of batches are using the responses sampled \
-                from student/teacher model, with 60% using original data \
-                Ignored when using supervised methods (ground-truth tokens)."
+            "help": "Fraction of batches whose responses are sampled from student (on-policy) distribution "
+            "or teacher (sequence-evel)  distribution rather than using the original responses, "
+            "same as the huggingface GKD trainer (parameter self.lmbda)."
+            " https://huggingface.co/docs/trl/gkd_trainer#trl.GKDConfig "
+            "e.g., 0.4 means 40% of batches are using the responses sampled "
+            "from student/teacher model, with 60% using original data "
+            "Ignored when using supervised methods (ground-truth tokens)."
         },
     )
     max_new_tokens: int = field(
         default=100,
         metadata={
-            "help": "Maximum number of tokens to generate for each response \
-            during on-policy or sequence-level sampling."
+            "help": "Maximum number of tokens to generate for each response "
+            "during on-policy or sequence-level sampling."
         },
     )
     sample_temperature: float = field(
         default=0.8,
         metadata={
-            "help": "Sample temperature used for on-policy or sequence-level response token generation. \
-                The higher the temperature, the more random the completions."
+            "help": "Sample temperature used for on-policy or sequence-level response token generation. "
+            "The higher the temperature, the more random the completions."
         },
     )
     # [end] sampling and generation configs
+
     include_prompt_loss: bool = field(
         default=False,
         metadata={"help": "Whether to include prompt token loss in the distillation loss."},
@@ -102,21 +172,21 @@ class DistillationConfig(BaseConfig):
         },
     )
 
-    eot_token: int = field(
+    eot_token: Optional[int] = field(
         default=None,
         metadata={"help": "End-of-think token used to exclude cot tokens during distillation loss calculation."},
     )
+
+    # misc options used by DistillationWorker._build_model_optimizer
+    use_liger: bool = field(default=False)
 
     def __post_init__(self):
         if self.enable_distill:
             assert self.teacher_model_path, "Teacher model path is required for distillation training."
 
-            # TODO(MrAta): add supported losses
-
             assert self.distill_loss in DISTILL_LOSS_MAP, (
                 f"Only {', '.join(list(DISTILL_LOSS_MAP.keys()))} are supported for distillation training."
             )
-
             assert 0.0 <= self.distillation_loss_ratio <= 1.0, "Distillation loss ratio for KL should be in [0, 1]."
             assert self.temperature > 0.0, "Temperature should be positive."
 
@@ -124,6 +194,7 @@ class DistillationConfig(BaseConfig):
                 assert 0.0 < self.forward_ratio < 1.0, "Forward loss ratio for combined KL should be in (0, 1)."
             if self.distill_loss == "js":
                 assert 0.0 <= self.js_beta <= 1.0, "Beta for Jensen-Shannon divergence should be in [0, 1]."
+
             assert self.sample_method in {
                 "supervised",
                 "on-policy",

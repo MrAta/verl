@@ -1,0 +1,56 @@
+# specify the default per-component configs
+defaults:
+
+  # student: trainer/config/distillation/student.yaml
+  - student@student: distillation/student
+
+  # teacher: trainer/config/distillation/teacher.yaml
+  - teacher@teacher: distillation/teacher
+
+  # data: trainer/config/data/legacy_data.yaml
+  - data@data: legacy_data
+
+  # self override last
+  - _self_
+
+# Global distillation control knobs
+distill:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.DistillationConfig
+
+  # Whether to enable distillation loss in training
+  enable_distill: true
+
+  # Path to teacher model (duplicated for convenience; teacher.model_path is primary)
+  teacher_model_path: ${teacher.model_path}
+
+  # Temperature applied to both student and teacher logits in distillation loss
+  temperature: 1.0
+
+  # Ratio of distillation loss vs. NLL loss in total training loss
+  distillation_loss_ratio: 0.9
+
+  # Distillation loss type: one of ${python: list(importlib.import_module('verl.trainer.distillation.losses').DISTILL_LOSS_MAP.keys())}
+  distill_loss: forward_kl
+
+  # Whether to torch.compile the distillation loss
+  compile_distill_loss: false
+
+  # Sampling strategy for response tokens in semi/on-policy modes
+  sample_method: supervised  # supervised | on-policy | sequence-level
+
+  # Fraction of batches using sampled responses when sample_method != supervised
+  sample_fraction: 1.0
+
+  # Max new tokens generated when sampling
+  max_new_tokens: 128
+
+  # Sampling temperature for on-policy / sequence-level generation
+  sample_temperature: 0.8
+
+# Trainer/runtime controls (kept minimal as this entrypoint is a WIP)
+ray_init:
+  num_cpus: null
+  timeline_json_file: null
+

@@ -1,0 +1,69 @@
+# Format checks enforced on CI:
+# 1. Comments must appear above each field.
+# 2. There must be a blank line between each field.
+# 3. Inline comments (after a field on the same line) are not allowed.
+# 4. Indentation level is respected for nested fields.
+
+# Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+_target_: verl.workers.config.DistillStudentConfig
+
+# Path to student model checkpoint (HF repo id or local path)
+model_path: ~/models/student-model
+
+# Trainer precision: one of [bf16, f16, 16-mixed, bf16-mixed, 32-true]
+dtype: bf16
+
+# Student optimizer configuration
+optim_config:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.FSDPOptimizerConfig
+
+  # Learning rate for student
+  lr: 1.0e-5
+
+  # Warmup style for LR scheduler: constant or cosine
+  warmup_style: constant
+
+  # Total training steps (injected by trainer script if left as -1)
+  total_training_steps: -1
+
+# Student FSDP engine configuration
+fsdp_config:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.FSDPEngineConfig
+
+  # Whether to offload model parameters to CPU
+  param_offload: False
+
+  # Whether to offload optimizer state to CPU
+  optimizer_offload: False
+
+  # Only for FSDP2: offload param/grad/optimizer during train
+  offload_policy: False
+
+  # Only for FSDP2: Reshard after forward pass to reduce memory footprint
+  reshard_after_forward: True
+
+  # FSDP group size; -1 means use all available GPUs
+  fsdp_size: -1
+
+  # FSDP wrap policy
+  wrap_policy:
+
+    # Minimum number of parameters to trigger wrapping
+    min_num_params: 0
+
+# Student checkpoint configuration
+checkpoint_config:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.trainer.config.CheckpointConfig
+
+  # Contents to save in checkpoints
+  save_contents: [model, optimizer, extra]
+
+  # Contents to load when resuming from checkpoints
+  load_contents: [model, optimizer, extra]
+

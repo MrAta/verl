@@ -1,0 +1,50 @@
+# Format checks enforced on CI:
+# 1. Comments must appear above each field.
+# 2. There must be a blank line between each field.
+# 3. Inline comments (after a field on the same line) are not allowed.
+# 4. Indentation level is respected for nested fields.
+
+# Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+_target_: verl.workers.config.DistillTeacherConfig
+
+# Path to teacher model checkpoint (HF repo id or local path)
+model_path: ~/models/teacher-model
+
+# Teacher inference engine configuration (e.g., SGLang)
+engine:
+
+  # sync: LLM, async: AsyncLLM
+  mode: sync
+
+  # Engine name: sglang or vllm (SGLang is recommended here)
+  name: sglang
+
+  # Load format used by the engine. For single GPU, use dummy_hf
+  load_format: dummy_hf
+
+  # Rollout precision used by the inference engine
+  dtype: bfloat16
+
+  # TP size for teacher engine. Not effective for hf
+  tensor_model_parallel_size: 1
+
+  # Fraction of GPU memory used by the engine for KV cache
+  gpu_memory_utilization: 0.5
+
+  # Whether to ignore EOS and continue generating after EOS is hit
+  ignore_eos: false
+
+  # Maximum number of new tokens to generate per response
+  response_length: 128
+
+  # Maximum prompt length
+  prompt_length: 1024
+
+  # Additional engine-specific kwargs
+  engine_kwargs:
+    sglang:
+      attention_backend: null
+
+  # Whether to wake up inference engine in multi-stage to reduce peak memory
+  multi_stage_wake_up: false
+
