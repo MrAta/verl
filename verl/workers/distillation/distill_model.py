@@ -14,6 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from verl import DataProto
+
 from .utils import get_distillation_loss_fn
 
 
@@ -24,13 +26,13 @@ class DistillLanguageModel:
         self.config = config
         self.loss_fn = get_distillation_loss_fn(loss_fn)
 
-    def _forward_batch(self, batch, teacher_logits):
+    def _forward_batch(self, batch):
         student_outputs = self.model(
             input_ids=batch["input_ids"],
             attention_mask=batch["attention_mask"],
             labels=batch["labels"],
         )
-        distillation_loss = self.loss_fn(batch, student_outputs.logits, teacher_logits)
+        distillation_loss = self.loss_fn(batch, student_outputs.logits)
 
         # NLL loss
         train_loss = student_outputs.loss
@@ -40,3 +42,15 @@ class DistillLanguageModel:
             + distillation_loss * self.config.distillation_loss_ratio
         )
         return distillation_loss, train_loss, total_loss
+
+    def update_student_model(self, batch: DataProto):
+        self.model.train()
+        distillation_loss, train_loss, total_loss = self._forward_batch(batch)
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        self.optimizer.step()
+        return {
+            "distillation_loss": distillation_loss.item(),
+            "train_loss": train_loss.item(),
+            "total_loss": total_loss.item(),
+        }
