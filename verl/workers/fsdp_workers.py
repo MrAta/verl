@@ -1781,7 +1781,7 @@ class AsyncActorRolloutRefWorker(ActorRolloutRefWorker):
         return True
 
 
-class DistillationBaseWorker(Worker, DistProfilerExtension):
+class DistillationWorker(Worker, DistProfilerExtension):
     def __init__(self, config: DictConfig, generates_sequences: bool, role: str, **kwargs):
         Worker.__init__(self)
         DistProfilerExtension.__init__(self, rank=self.rank, config=omega_conf_to_dataclass(config.get("profiler", {})))
@@ -1804,7 +1804,13 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        raise NotImplementedError
+        self.model, self.optimizer, self.lr_scheduler, self.model_config = self._build_model_optimizer(
+            model_path=self.config.get(self.role).model_path,
+            fsdp_config=self.config.get(self.role).fsdp_config,
+            trainer_precision=self.config.get(self.role).dtype,
+            optim_config=self.config.get(self.role).optim_config,
+            use_liger=self.config.use_liger,
+        )
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def compute_log_prob(self, data: DataProto):
@@ -1951,56 +1957,3 @@ class DistillationBaseWorker(Worker, DistProfilerExtension):
             )
 
         return model_fsdp, optimizer, lr_scheduler, model_config
-
-
-class DistillationStudentWorker(DistillationBaseWorker):
-    def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
-        super().__init__(config, generates_sequences, role="student", **kwargs)
-        self.device_mesh = create_device_mesh(self.world_size, self.config.student.fsdp_config.fsdp_size)
-
-    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
-    def init_model(self):
-        self.model, self.optimizer, self.lr_scheduler, self.model_config = self._build_model_optimizer(
-            model_path=self.config.student.model_path,
-            fsdp_config=self.config.student.fsdp_config,
-            trainer_precision=self.config.student.dtype,
-            optim_config=self.config.student.optim_config,
-            use_liger=self.config.use_liger,
-        )
-        if self.generate_sequences:
-            self._build_engine()
-
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def compute_log_prob(self, data: DataProto):
-        pass
-
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def update_student(self, data: DataProto):
-        pass
-
-
-class DistillationTeacherWorker(DistillationBaseWorker):
-    """
-    The teacher model always uses the sglang engine for both computing log probabilities and generating sequences.
-    """
-
-    def __init__(self, config: DictConfig, generates_sequences: bool, **kwargs):
-        super().__init__(config, generates_sequences, role="teacher", **kwargs)
-        self.device_mesh = create_device_mesh(self.world_size, self.config.teacher.fsdp_config.fsdp_size)
-        self.teacher_model, _, _, self.teacher_model_config = self._build_model_optimizer(
-            model_path=self.config.teacher.model_path,
-            fsdp_config=self.config.teacher.fsdp_config,
-            trainer_precision=self.config.teacher.dtype,
-            optim_config=None,
-            use_liger=self.config.use_liger,
-        )
-        if self.generate_sequences:
-            self._build_engine()
-
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def compute_log_prob(self, data: DataProto):
-        pass
-
-    @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
-    def generate_sequences(self, prompts: DataProto):
-        pass
