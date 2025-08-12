@@ -1819,7 +1819,7 @@ class DistillationWorker(Worker, DistProfilerExtension):
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def generate_sequences(self, prompts: DataProto):
-        raise NotImplementedError
+        raise NotImplementedError("Only supervised distillation is supported, no generation is needed for now!")
 
     @register(dispatch_mode=make_nd_compute_dataproto_dispatch_fn(mesh_name="student"))
     @DistProfiler.annotate(color="red", role="student_update")
