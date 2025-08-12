@@ -16,5 +16,5 @@
 
 
 class DistillLanguageModel:
-    def __init__(self, config):
+    def __init__(self, model, optimizer, model_config):
         pass

@@ -1805,13 +1805,20 @@ class DistillationWorker(Worker, DistProfilerExtension):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        self.model, self.optimizer, self.lr_scheduler, self.model_config = self._build_model_optimizer(
-            model_path=self.config.get(self.role).model_path,
-            fsdp_config=self.config.get(self.role).fsdp_config,
-            trainer_precision=self.config.get(self.role).dtype,
-            optim_config=self.config.get(self.role).optim_config,
-            use_liger=self.config.use_liger,
-        )
+        from verl.workers.distillation.distill_model import DistillLanguageModel
+
+        if self._is_student:
+            # Only the student model needs an fsdp model
+            self.fsdp_module, self.optimizer, self.lr_scheduler, self.model_config = self._build_model_optimizer(
+                model_path=self.config.student.model_path,
+                fsdp_config=self.config.student.fsdp_config,
+                trainer_precision=self.config.student.dtype,
+                optim_config=self.config.student.optim_config,
+                use_liger=self.config.use_liger,
+            )
+            self.student_model = DistillLanguageModel(self.fsdp_module, self.optimizer, self.config.student)
+        # for both student and the teacher, we need to build the engine
+        self.engine, self.engine_sharding_manager = self._build_engine()
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def compute_log_prob(self, data: DataProto):
@@ -1835,7 +1842,46 @@ class DistillationWorker(Worker, DistProfilerExtension):
         raise NotImplementedError
 
     def _build_engine(self):
-        pass
+        from torch.distributed.device_mesh import init_device_mesh
+
+        from verl.workers.rollout.sglang_rollout import SGLangRollout
+        from verl.workers.sharding_manager.fsdp_sglang import FSDPSGLangShardingManager
+
+        infer_tp = self.config.get(self.role).engine.tensor_model_parallel_size
+        dp = self.world_size // infer_tp
+        assert self.world_size % infer_tp == 0, f"world_size {self.world_size} is not divisible by infer_tp {infer_tp}"
+
+        device_mesh = init_device_mesh(get_device_name(), mesh_shape=(dp, infer_tp), mesh_dim_names=["dp", "infer_tp"])
+
+        is_rank_0 = device_mesh["infer_tp"].get_local_rank() == 0
+        self._register_dispatch_collect_info(
+            mesh_name="engine",
+            dp_rank=device_mesh["dp"].get_local_rank(),
+            is_collect=is_rank_0,
+        )
+
+        local_path = copy_to_local(self.config.get(self.role).model_path)
+        engine = SGLangRollout(
+            actor_module=local_path,
+            config=self.config.get(self.role).engine,
+            processing_class=self.processor if self.processor is not None else self.tokenizer,
+            model_hf_config=self.model_config,
+            trust_remote_code=False,
+        )
+        if torch.distributed.get_wolrd_size() == 1:
+            self.config.get(self.role).engine.load_format = "dummy_hf"
+
+        engine_sharding_manager = FSDPSGLangShardingManager(
+            module=self.fsdp_module,
+            inference_engine=engine._engine,
+            model_config=self.model_config,
+            rollout_config=self.config.get(self.role).engine,
+            full_params="hf" in self.config.get(self.role).engine.load_format,
+            device_mesh=device_mesh,
+            multi_stage_wake_up=self.config.get(self.role).engine.multi_stage_wake_up,
+        )
+
+        return engine, engine_sharding_manager
 
     def _build_model_optimizer(
         self,
