@@ -1805,7 +1805,7 @@ class DistillationWorker(Worker, DistProfilerExtension):
 
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self):
-        from verl.workers.distillation.distill_model import DistillLanguageModel
+        from verl.workers.distillation import DistillLanguageModel
 
         if self._is_student:
             # Only the student model needs an fsdp model
