@@ -18,6 +18,7 @@ from typing import Literal
 from dataclasses_json import Undefined, dataclass_json
 
 from verl.base_config import BaseConfig
+from verl.trainer.distillation.losses import DISTILL_LOSS_MAP
 
 __all__ = ["DistillationConfig"]
 
@@ -111,10 +112,10 @@ class DistillationConfig(BaseConfig):
             assert self.teacher_model_path, "Teacher model path is required for distillation training."
 
             # TODO(MrAta): add supported losses
-            # supported_losses = DISTILL_LOSS_MAP.keys()
-            # assert (
-            #     self.distill_loss in supported_losses
-            # ), f"Only {', '.join(supported_losses)} are supported for distillation training."
+
+            assert self.distill_loss in DISTILL_LOSS_MAP, (
+                f"Only {', '.join(list(DISTILL_LOSS_MAP.keys()))} are supported for distillation training."
+            )
 
             assert 0.0 <= self.distillation_loss_ratio <= 1.0, "Distillation loss ratio for KL should be in [0, 1]."
             assert self.temperature > 0.0, "Temperature should be positive."
