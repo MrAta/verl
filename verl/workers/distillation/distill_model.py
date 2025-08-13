@@ -32,6 +32,7 @@ class DistillLanguageModel:
             attention_mask=batch["attention_mask"],
             labels=batch["labels"],
         )
+        # batch contains the teacher logits.
         distillation_loss = self.loss_fn(batch, student_outputs.logits)
 
         # NLL loss

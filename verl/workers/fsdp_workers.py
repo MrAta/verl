@@ -1911,7 +1911,6 @@ class DistillationWorker(Worker, DistProfilerExtension):
         fsdp_config: FSDPEngineConfig,
         trainer_precision: str,
         optim_config=None,
-        use_liger=False,
         trust_remote_code=False,
     ):
         from torch import optim
@@ -1948,6 +1947,7 @@ class DistillationWorker(Worker, DistProfilerExtension):
             use_cache=True,
         )
 
+        self.device_mesh = create_device_mesh(self.world_size, self.config.get(self.role).engine.fsdp_size)
         init_context = get_init_weight_context_manager(
             use_meta_tensor=not model_config.tie_word_embeddings, mesh=self.device_mesh
         )
@@ -1962,10 +1962,7 @@ class DistillationWorker(Worker, DistProfilerExtension):
                 trust_remote_code=trust_remote_code,
             )
 
-            if use_liger:
-                from liger_kernel.transformers.monkey_patch import _apply_liger_kernel_to_instance
-
-                _apply_liger_kernel_to_instance(model)
+            # TODO(MrAta): add support for liger
 
             model.to(dtype)
         torch.distributed.barrier()
