@@ -11,3 +11,43 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+from typing import Optional
+
+from torch.utils.data import Dataset, Sampler
+
+from verl.trainer.ppo.ray_trainer import RayWorkerGroup, ResourcePoolManager, Role, WorkerType
+
+
+class RayDistiller:
+    def __init__(
+        self,
+        tokenizer,
+        processor,
+        role_worker_mapping: dict[Role, WorkerType],
+        resource_pool_manager: ResourcePoolManager,
+        ray_worker_group_cls: type[RayWorkerGroup] = RayWorkerGroup,
+        train_dataset: Optional[Dataset] = None,
+        val_dataset: Optional[Dataset] = None,
+        train_sampler: Optional[Sampler] = None,
+        device_name: Optional[str] = None,
+    ):
+        pass
+
+    def _validate_config(self):
+        pass
+
+    def _create_dataloader(self):
+        pass
+
+    def _create_sampler(self):
+        pass
+
+    def init_workers(self):
+        pass
+
+    def fit(self):
+        pass
+
+    def _save_checkpoint(self):
+        pass

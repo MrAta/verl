@@ -77,6 +77,8 @@ class Role(Enum):
     RefPolicy = 4
     RewardModel = 5
     ActorRolloutRef = 6
+    DistllationStudent = 7
+    DistllationTeacher = 8
 
 
 @dataclass
