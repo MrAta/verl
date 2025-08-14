@@ -104,21 +104,15 @@ class TaskRunner:
         # Download the checkpoint from HDFS to the local machine.
         # `use_shm` determines whether to use shared memory, which could lead to faster model loading if turned on
         student_local_path = copy_to_local(config.student.model_path, use_shm=config.get("use_shm", False))
-        teacher_local_path = copy_to_local(config.teacher.model_path, use_shm=config.get("use_shm", False))
-        print(f"Student model path: {student_local_path}")
-        print(f"Teacher model path: {teacher_local_path}")
 
         # Instantiate the tokenizer and processor.
-        from verl.utils import hf_processor, hf_tokenizer
+        from verl.utils import hf_tokenizer
 
         trust_remote_code = config.get("trust_remote_code", False)
         tokenizer = hf_tokenizer(student_local_path, trust_remote_code=trust_remote_code)
-        processor = hf_processor(student_local_path, trust_remote_code=trust_remote_code, use_fast=True)
-        print(f"Tokenizer: {tokenizer}")
-        print(f"Processor: {processor}")
 
-        self.role_worker_mapping[Role.DistllationStudent] = ray.remote(DistillationWorker)
-        self.role_worker_mapping[Role.DistllationTeacher] = ray.remote(DistillationWorker)
+        self.role_worker_mapping[Role.DistillationStudent] = ray.remote(DistillationWorker)
+        self.role_worker_mapping[Role.DistillationTeacher] = ray.remote(DistillationWorker)
 
         resource_pool_manager = self.init_resource_pool_mgr(config)
         train_dataset = create_distillation_dataset(config)
@@ -126,8 +120,8 @@ class TaskRunner:
         train_sampler = create_distillation_sampler(config)
 
         distiller = RayDistiller(
+            config=config,
             tokenizer=tokenizer,
-            processor=processor,
             role_worker_mapping=self.role_worker_mapping,
             resource_pool_manager=resource_pool_manager,
             train_dataset=train_dataset,
