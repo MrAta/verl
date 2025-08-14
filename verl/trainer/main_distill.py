@@ -105,7 +105,6 @@ class TaskRunner:
         # `use_shm` determines whether to use shared memory, which could lead to faster model loading if turned on
         student_local_path = copy_to_local(config.student.model_path, use_shm=config.get("use_shm", False))
 
-        # Instantiate the tokenizer and processor.
         from verl.utils import hf_tokenizer
 
         trust_remote_code = config.get("trust_remote_code", False)

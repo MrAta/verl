@@ -1822,7 +1822,7 @@ class DistillationWorker(Worker, DistProfilerExtension):
                 model=self.fsdp_module,
                 optimizer=self.optimizer,
                 lr_scheduler=self.lr_scheduler,
-                processing_class=self.processor if self.processor is not None else self.tokenizer,
+                processing_class=self.tokenizer,
                 checkpoint_config=self.config.student.checkpoint_config,
             )
             if self.generates_sequences:
@@ -1886,7 +1886,7 @@ class DistillationWorker(Worker, DistProfilerExtension):
         engine = SGLangRollout(
             actor_module=local_path,
             config=self.config.get(self.role).engine,
-            processing_class=self.processor if self.processor is not None else self.tokenizer,
+            processing_class=self.tokenizer,
             model_hf_config=self.model_config,
             trust_remote_code=False,
         )
@@ -1923,7 +1923,6 @@ class DistillationWorker(Worker, DistProfilerExtension):
 
         local_path = model_path
         self.tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
-        self.processor = hf_processor(local_path, trust_remote_code=trust_remote_code)
 
         trainer_precision = fsdp_config.trainer_precision
         if "mixed" in trainer_precision or trainer_precision == "32-true":
